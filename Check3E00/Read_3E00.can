@@ -1,0 +1,283 @@
+/*@!Encoding:1252*/
+includes
+{
+  #include "./Common/UART.can"
+}
+
+variables
+{
+  const int Chn_Num = 11;
+  const double sleepCurr = 0.0008;    // 0.8mA
+  const double wakeupCurr = 0.5;      // 500mA
+  byte Check_Flag,Test_Result;
+  
+  enum _Switch
+  {
+    _OFF,
+    _ON
+  };
+  
+  enum RetVal
+  {
+    Flase,
+    True
+  };
+  
+  struct NM_WakeFrame
+  {
+    int CAN_Channel;
+    int CAN_id;
+    char NM_Msg_name[10];
+    byte NM_Byte0;
+  };
+  
+  enum ChannelMapping
+  {
+    Placeholder,Public_CANFD1,RT1_RollBack_CANFD,CCU_CANFD2,CCU_CANFD4,CCU_ChargCAN,CCU_CANFD3,OBD_CAN,
+    CZF_CANFD,CZL_CANFD,CZR_CANFD,CZT_CANFD,CIDC_CANFD,CCU_CANFD1,RT2_RollBack_CANFD,Public_CANFD2,TBOX_CANFD
+  };
+  
+  struct NM_WakeFrame NM_WakeFrame_Group[Chn_Num] = 
+  {
+    {Public_CANFD1,0x50E,"ADC_NM",0x0E},
+    {CCU_CANFD2,0x561,"BMC_NM",0x61},
+    {CCU_CANFD3,0x567,"RBM_NM",0x67},
+    {CZF_CANFD,0x570,"ZCUF_NM",0x70},
+    {CZL_CANFD,0x571,"ZCUL_NM",0x71},
+    {CZR_CANFD,0x572,"ZCUR_NM",0x72},
+    {CZT_CANFD,0x573,"ZCUT_NM",0x73},
+    {CIDC_CANFD,0x52B,"IDC_NM",0x2B},
+    {CCU_CANFD1,0x565,"MFS_NM",0x65},
+    {Public_CANFD2,0x510,"BCS_NM",0x10},
+    {TBOX_CANFD,0x52D,"TBOX_NM",0x2D}
+  };
+}
+
+void StopSendNM_SwitchCtrl(enum _Switch NM_StopSt)
+{
+  testStep("StopSendNM_SwitchCtrl","NM_StopSt = %d",NM_StopSt);
+  write("StopSendNM_SwitchCtrl : NM_StopSt = %d",NM_StopSt);
+  
+  @sysvar::_NMControl::CCU_CANFD1::StateControl::BusReleaseAll = NM_StopSt;
+  @sysvar::_NMControl::CCU_CANFD2::StateControl::BusReleaseAll = NM_StopSt;
+  @sysvar::_NMControl::CCU_CANFD3::StateControl::BusReleaseAll = NM_StopSt;
+  @sysvar::_NMControl::CIDC_CANFD::StateControl::BusReleaseAll = NM_StopSt;
+  @sysvar::_NMControl::CZF_CANFD::StateControl::BusReleaseAll = NM_StopSt;
+  @sysvar::_NMControl::CZL_CANFD::StateControl::BusReleaseAll = NM_StopSt;
+  @sysvar::_NMControl::CZR_CANFD::StateControl::BusReleaseAll = NM_StopSt;
+  @sysvar::_NMControl::CZT_CANFD::StateControl::BusReleaseAll = NM_StopSt;
+  @sysvar::_NMControl::Public_CANFD1::StateControl::BusReleaseAll = NM_StopSt;
+  @sysvar::_NMControl::Public_CANFD2::StateControl::BusReleaseAll = NM_StopSt;
+  @sysvar::_NMControl::TBOX_CANFD::StateControl::BusReleaseAll = NM_StopSt;
+}
+
+void KL15_SwitchCtrl(enum _Switch KL15_St)
+{
+  testStep("KL15_SwitchCtrl","KL15_St = %d",KL15_St);
+  write("KL15_SwitchCtrl : KL15_St = %d",KL15_St);
+  
+  switch(KL15_St)
+  {
+    case _OFF:
+      @IL::Klemme15 = _OFF;
+      break;
+    case _ON:
+      @IL::Klemme15 = _ON;
+      break;
+  }
+}
+
+void NM_WakeUp()
+{
+  message * NM_Frame;
+  int _id,i;
+  byte _index,_channel,_byte0;
+  byte NM_Frame_ByteArr[7] = {0x50,0x00,0x01,0x00,0x00,0x00,0x00};
+  
+  testStep("TestStep","NM WakeUp");
+  write("execute : NM_WakeUp");
+  testWaitForTimeoutSilent(500);
+  
+  _index = random(Chn_Num);  //generate random number in the interval [0,10]
+  write("_index = %d",_index);
+  
+  _id = NM_WakeFrame_Group[_index].CAN_id;
+  _channel = NM_WakeFrame_Group[_index].CAN_Channel;
+  _byte0 = NM_WakeFrame_Group[_index].NM_Byte0;
+  
+  NM_Frame.id = _id;
+  NM_Frame.dlc = 8;
+  NM_Frame.can = _channel;
+  
+  NM_Frame.byte(0) = _byte0;
+  
+  for(i=1;i<=elCount(NM_Frame_ByteArr);i++)
+    NM_Frame.byte(i) = NM_Frame_ByteArr[i-1];
+  
+  output(NM_Frame);
+  write("CAN%d output 0x%x NM Frame <%02x 50 00 01 00 00 00 00>",_channel,_id,_byte0);
+  testStep("NM wakeup msg information","CAN%d 0x%x <%02x 50 00 01 00 00 00 00>",_channel,_id,_byte0);
+  testWaitForTimeoutSilent(200);
+}
+
+int CurrentJudgment(double CurrValue,double StandardLine,byte Type)
+{
+  testStep("CurrentJudgment","CurrValue = %f,StandardLine = %f,Type = %d",CurrValue,StandardLine,Type);
+  write("CurrentJudgment : CurrValue = %f,StandardLine = %f,Type = %d",CurrValue,StandardLine,Type);
+  
+  if((Type && CurrValue >= StandardLine) || (Type == 0 && CurrValue <= StandardLine))
+    return True;
+  else
+    return Flase;
+}
+
+void Fn_CCU_sleep()
+{
+  //int sleep_result;
+  
+  testStep("TestStep","Fn_CCU_sleep");
+  write("execute : Fn_CCU_sleep");
+  
+  //sleep_result = -1;
+  
+  StopSendNM_SwitchCtrl(_OFF);
+  testWaitForTimeoutSilent(1000);
+  StopSendNM_SwitchCtrl(_ON);
+  testWaitForTimeoutSilent(1000);
+  KL15_SwitchCtrl(_OFF);
+  testWaitForTimeoutSilent(1000 * 180);
+}
+
+int Fn_CCU_wakeup()
+{
+  int wakeup_result;
+  double currVal;
+  
+  testStep("TestStep","Fn_CCU_wakeup");
+  write("execute : Fn_CCU_wakeup");
+  
+  wakeup_result = -1;
+  
+  NM_WakeUp();
+  testWaitForTimeoutSilent(2000);
+  KL15_SwitchCtrl(_ON);
+  testWaitForTimeoutSilent(1000);
+  Fn_RS232_ConnectExtPS(5,9600);
+  currVal = Fn_GetExtPowerSupplyCurrent(CH2);  //get CH2 currentValue
+  write("currVal(wakeup) = %.4f",currVal);
+  testWaitForTimeoutSilent(1000);
+  Fn_RS232_DisconnectExtPS();
+  wakeup_result = CurrentJudgment(currVal,wakeupCurr,1);
+  
+  if(wakeup_result)
+    return True;
+  else 
+    return Flase;
+}
+
+Msg_Send_1001()
+{
+  message 0x74f Msg_Test_Send;
+  
+  Msg_Test_Send.dlc = 8;
+  Msg_Test_Send.can = 7;
+  
+  Msg_Test_Send.FDF = 1;
+  Msg_Test_Send.BRS = 1;
+  
+  Msg_Test_Send.byte(0) = 0x02;
+  Msg_Test_Send.byte(1) = 0x10;
+  Msg_Test_Send.byte(2) = 0x01;
+  
+  output(Msg_Test_Send);
+  write("Output Msg --> 10 01");
+}
+
+Msg_Send_223E00()
+{
+  message 0x74f Msg_Test_Send;
+  
+  Msg_Test_Send.dlc = 8;
+  Msg_Test_Send.can = 7;
+  
+  Msg_Test_Send.FDF = 1;
+  Msg_Test_Send.BRS = 1;
+  
+  Msg_Test_Send.byte(0) = 0x03;
+  Msg_Test_Send.byte(1) = 0x22;
+  Msg_Test_Send.byte(2) = 0x3E;
+  Msg_Test_Send.byte(3) = 0x00;
+  
+  output(Msg_Test_Send);
+  write("Output Msg --> 22 3E 00");
+}
+
+
+on message 0x7cf
+{
+  //write("receive 0x7cf %d %d %d",this.byte(0), this.byte(1), this.byte(2));
+//  write(this.byte(0), this.byte(1), this.byte(2));
+  if(Check_Flag == 0) return;
+
+  if(this.byte(2) == 0x62 && this.byte(3) == 0x3E && this.byte(4) == 0x00)
+  {
+    if(this.byte(5) == 0x00 && this.byte(6) == 0x00 && this.byte(7) == 0x00 && this.byte(8) == 0x00 && this.byte(9) == 0x00 && this.byte(10) == 0x00 && this.byte(11) == 0x00 && this.byte(12) == 0x00)
+    {
+      Test_Result = 0;
+      write("Resp NOK !!!!");
+    }
+    else
+    {
+      Test_Result = 1;
+      write("Resp OK !!!!");
+    }
+    Check_Flag = 0;
+  }
+}
+
+MainTest()
+{ 
+  int i;
+  double currVal;
+  
+  for(i=0;i<1000;i++)
+  {
+    write("No : %d",i+1);
+    Test_Result = 0;
+    
+    Fn_CCU_sleep();
+    
+    Fn_RS232_ConnectExtPS(5,9600);
+    
+    currVal = Fn_GetExtPowerSupplyCurrent(CH2);  //get CH2 currentValue
+    write("currVal(sleep) = %.4f",currVal);
+    
+    while(CurrentJudgment(currVal,sleepCurr,0) != 1)
+    {
+      write("No sleep,wait...");
+      currVal = Fn_GetExtPowerSupplyCurrent(CH2);  //get CH2 currentValue
+      write("currVal(sleep) = %.4f",currVal);
+      testWaitForTimeoutSilent(10000);
+    }
+    
+    write("sleep success !!!");
+    
+    Fn_RS232_DisconnectExtPS();
+    
+    testWaitForTimeoutSilent(5000);
+    Fn_CCU_wakeup();
+    testWaitForTimeoutSilent(3000);
+  
+    Check_Flag = 0;
+    Msg_Send_1001();
+    testWaitForTimeoutSilent(500);
+    Check_Flag = 1;
+    Msg_Send_223E00();
+    testWaitForTimeoutSilent(1000);
+    Check_Flag = 0;
+    testWaitForTimeoutSilent(1000);
+    
+    if(Test_Result == 0)
+      break;
+  }
+}
